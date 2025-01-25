@@ -1,0 +1,158 @@
+---
+title: "Logistic_regression_productPrediction"
+author: "Danny Ryan"
+output: html_document
+date: "2024-09-17"
+---
+#reading in packages
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(DescTools)
+library(writexl)
+library(tidyverse)
+library(car)
+library(mgcv)
+library(car)
+library(Hmisc)
+library(ROCit)
+
+
+library(caret)
+library(ISLR)
+```
+
+#reading in data, and then adding new category of 'MISSING' to missing data
+```{r}
+#reading in train and validate data
+ins_t = read.csv("C:\\Users\\dryan\\OneDrive\\Documents\\NC_state\\Fall\\HW Team 1\\HW2\\insurance_t_bin.csv")
+ins_v = read.csv("C:\\Users\\dryan\\OneDrive\\Documents\\NC_state\\Fall\\HW Team 1\\HW2\\insurance_v_bin.csv")
+
+#adding 'MISSING' category
+ins_t = ins_t %>%
+  mutate(
+    INV = ifelse(is.na(INV),"MISSING",INV),
+    CC = ifelse(is.na(CC),"MISSING",CC),
+    CCPURC = ifelse(is.na(CCPURC),"MISSING",CCPURC),
+    HMOWN = ifelse(is.na(HMOWN),"MISSING",HMOWN)
+  )
+
+#adding 'MISSING' category
+ins_v = ins_v %>%
+  mutate(
+    INV = ifelse(is.na(INV),"MISSING",INV),
+    CC = ifelse(is.na(CC),"MISSING",CC),
+    CCPURC = ifelse(is.na(CCPURC),"MISSING",CCPURC),
+    HMOWN = ifelse(is.na(HMOWN),"MISSING",HMOWN)
+  )
+
+```
+
+## Objective
+
+
+```{r}
+#final model from previous analysis (used stepwise selection with p-value as the citeria)
+final.model = glm(formula = INS ~ DDA + NSF + IRA + INV + MTG + CC + DDABAL_BIN + 
+    CHECKS_BIN + TELLER_BIN + SAVBAL_BIN + ATMAMT_BIN + CDBAL_BIN + 
+    ILSBAL_BIN + MMBAL_BIN + DDA:IRA, family = binomial(link = "logit"), 
+    data = ins_t)
+
+#likelihood ratio test
+#[3] will return p-value column
+car::Anova(final.model, test = "LR", type = "III", singular.ok = TRUE)[3]
+```
+
+
+#getting Concordance percentage and descrimination of slope for model evaluation purposes
+```{r}
+#using model to predict the target variable
+ins_t$p_hat <- predict(final.model, type = "response")
+
+#seperating 0 and 1's predicted probabilities by their true value of targer variable
+p1 <- ins_t$p_hat[ins_t$INS == 1]
+p0 <- ins_t$p_hat[ins_t$INS == 0]
+coef_discrim <- mean(p1) - mean(p0)
+
+print(paste("p0 =",round(mean(p0),4))) #0.2590
+print(paste("p1 =",round(mean(p1),4))) #0.5049
+print(paste("coefficient of descrimination =",round(coef_discrim,4)))
+
+#plotting discrimination slopes to visually see the difference between the 0's and 1's
+coef_discrim <- mean(p1) - mean(p0)
+ggplot(ins_t, aes(p_hat, fill = factor(INS))) + geom_density(alpha = 0.7) + scale_fill_grey() + labs(x = "Predicted Probability", fill = "Outcome", y = "Distribution of 0's and 1's")
+
+#concordance
+somers2(ins_t$p_hat, ins_t$INS)
+```
+  
+#Getting KS cutoff and KS statistic
+```{r}
+#ks plot
+ks <- summary(ksplot(logit_roc))
+
+print(paste("KS stat = ",ksplot(logit_roc)$`KS stat`))
+print(paste("KS Cutoff = ",ksplot(logit_roc)$`KS Cutoff`))
+```
+  
+  
+```{r}
+#summary statistics
+logit_meas <- measureit(ins_t$p_hat, ins_t$INS, measure = c("ACC", "SENS", "SPEC"))
+print(logit_meas)
+
+#Making ROCIT
+score <- final.model$fitted.values
+class <- final.model$y
+rocit.out <- rocit(score = score, class = class)
+
+#plotting ROC curve
+plot(rocit.out)
+plot(rocit.out)$optimal
+summary(rocit.out)
+```
+
+
+
+
+  
+#Confusion Matrices of Results
+```{r}
+#predecting using model
+ins_v$p_hat <- predict(final.model, newdata = ins_v,type = "response")
+
+#Confusion Matrix
+ins_v <- ins_v %>%
+  mutate(INS_hat = ifelse(p_hat > ksplot(rocit.out)$`KS Cutoff`, 1, 0))
+
+
+#making the variables as type factor for the confusion matrix function below
+ins_v <- ins_v %>%  mutate(INS_hat = as.factor(INS_hat),
+                           INS = as.factor(INS))
+
+print(confusionMatrix(ins_v$INS_hat, ins_v$INS ))
+```
+
+
+#lift curve of results to see how effective model will be in targeting customers 
+```{r}
+#Lift
+scorevalid <- predict(final.model, newdata = ins_v,type = "response")
+classvalid <- ins_v$INS
+
+#binning predictions
+rocit.out.valid <- rocit(score = scorevalid, class = classvalid, method = "bin")
+
+#lift chart by bucket( decile by predicted probability of customer purchasing the product)
+logit_lift <- gainstable(rocit.out.valid)
+print(logit_lift)
+
+#cumulative lift
+plot(logit_lift, type = 1)
+
+#response rate versus cumulative response rate
+plot(logit_lift, type = 2)
+
+#cumulative capture rate
+plot(logit_lift, type = 3)
+```
+
